@@ -40,7 +40,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null); // { id, name, role }
   const [members, setMembers] = useState([]);
   const [items, setItems] = useState([]);
-  const [settings, setSettings] = useState({ discordWebhook: '', imgurClientId: 'e4544b14d2417a8' }); // Default public client id fallback
+  const [settings, setSettings] = useState({ discordWebhook: '' }); // 移除了 Imgur 設定
   const [activeTab, setActiveTab] = useState('selling');
   const [loading, setLoading] = useState(true);
 
@@ -93,7 +93,7 @@ export default function App() {
       if (docSnap.exists()) {
         setSettings(docSnap.data());
       } else {
-        setDoc(settingsRef, { discordWebhook: '', imgurClientId: 'e4544b14d2417a8' });
+        setDoc(settingsRef, { discordWebhook: '' });
       }
       setLoading(false);
     }, console.error);
@@ -500,7 +500,7 @@ function CreateItemModal({ onClose, members, currentUser }) {
         sellerId: currentUser.id,
         status: 'selling',
         createdAt: Date.now(),
-        images: {},
+        listedItems: {}, // 從原本的 images 改成 listedItems
         settled: {}
       });
       onClose();
@@ -664,51 +664,40 @@ function SoldView({ items, members, currentUser, settings }) {
 }
 
 function SoldItemCard({ item, members, currentUser, settings }) {
-  const [uploadingState, setUploadingState] = useState({}); // { [participantId]: boolean }
+  const [listInputs, setListInputs] = useState({}); // 儲存輸入框狀態 { [participantId]: { name, price } }
+  const [isNotifying, setIsNotifying] = useState(false);
   const isSeller = currentUser.id === item.sellerId;
   const seller = members.find(m => m.id === item.sellerId) || {};
   
   const { netProfit, totalCosts, perPerson } = calculateShares(item.price, item.costs || [], item.participants.length);
 
-  const handleUploadImage = async (e, participantId) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploadingState(prev => ({ ...prev, [participantId]: true }));
+  // 送出文字提醒
+  const handleNotify = async (participantId) => {
+    const input = listInputs[participantId];
+    if (!input?.name || !input?.price) return alert('請填寫上架物品名稱與價格');
+    
+    setIsNotifying(true);
     try {
-      // 1. Upload to Imgur
-      const formData = new FormData();
-      formData.append('image', file);
-      const res = await fetch('https://api.imgur.com/3/image', {
-        method: 'POST',
-        headers: { Authorization: `Client-ID ${settings.imgurClientId}` },
-        body: formData
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.data.error || '上傳失敗');
-      
-      const imageUrl = data.data.link;
+      // 1. 儲存至 Firebase
+      const newListedItems = { ...(item.listedItems || {}), [participantId]: input };
+      await updateDoc(doc(itemsRef, item.id), { listedItems: newListedItems });
 
-      // 2. Save to Firebase
-      const newImages = { ...(item.images || {}), [participantId]: imageUrl };
-      await updateDoc(doc(itemsRef, item.id), { images: newImages });
-
-      // 3. Send Discord Webhook
+      // 2. 觸發 Discord Webhook
       if (settings.discordWebhook && seller.discordId) {
         const pName = members.find(m => m.id === participantId)?.name || '某人';
-        const msg = `<@${seller.discordId}> 玩家 **${pName}** 已將物品【${item.name}】上架，請前往遊戲內拉取！\n圖片確認：${imageUrl}`;
+        const msg = `<@${seller.discordId}> 玩家 **${pName}** 已將替代物品【${input.name}】上架，價格為 **$${input.price}**`;
         await fetch(settings.discordWebhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: msg })
         });
       }
-      alert('上傳成功並已通知賣家！');
+      alert('已成功送出提醒並記錄！');
     } catch (error) {
       console.error(error);
-      alert('上傳發生錯誤，請檢查 Imgur Client ID 或是檔案大小。');
+      alert('發生錯誤，請稍後再試。');
     } finally {
-      setUploadingState(prev => ({ ...prev, [participantId]: false }));
+      setIsNotifying(false);
     }
   };
 
@@ -724,7 +713,6 @@ function SoldItemCard({ item, members, currentUser, settings }) {
     await updateDoc(doc(itemsRef, item.id), { status: 'archived' });
   };
 
-  // Check if everyone (except seller) is settled
   const others = item.participants.filter(id => id !== item.sellerId);
   const allSettled = others.every(id => item.settled?.[id]);
 
@@ -755,12 +743,13 @@ function SoldItemCard({ item, members, currentUser, settings }) {
             const isSelf = pid === currentUser.id;
             const pName = members.find(m => m.id === pid)?.name || '未知';
             const isThisSeller = pid === item.sellerId;
-            const hasImage = !!item.images?.[pid];
+            const hasListed = !!item.listedItems?.[pid];
+            const listedData = item.listedItems?.[pid];
             const isSettled = !!item.settled?.[pid];
             
             return (
-              <div key={pid} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl border ${isSettled ? 'bg-green-900/10 border-green-900/30' : 'bg-gray-950 border-gray-800'} gap-3`}>
-                <div className="flex items-center gap-3">
+              <div key={pid} className={`flex flex-col xl:flex-row xl:items-center justify-between p-3 rounded-xl border ${isSettled ? 'bg-green-900/10 border-green-900/30' : 'bg-gray-950 border-gray-800'} gap-3`}>
+                <div className="flex items-center gap-3 whitespace-nowrap">
                   <div className={`w-2.5 h-2.5 rounded-full ${isSettled ? 'bg-green-500' : 'bg-yellow-500'}`} />
                   <span className={`font-medium ${isSelf ? 'text-indigo-400' : 'text-gray-200'}`}>
                     {pName} {isThisSeller && <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full ml-2">賣家</span>}
@@ -768,34 +757,49 @@ function SoldItemCard({ item, members, currentUser, settings }) {
                 </div>
 
                 {!isThisSeller && (
-                  <div className="flex items-center gap-3 ml-5 sm:ml-0">
-                    {/* Image handling */}
-                    {hasImage ? (
-                      <a href={item.images[pid]} target="_blank" rel="noreferrer" className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1 bg-indigo-500/10 px-3 py-1.5 rounded-lg transition-colors">
-                        <ImageIcon size={14} />
-                        查看截圖
-                      </a>
+                  <div className="flex flex-wrap items-center gap-3 ml-5 xl:ml-0">
+                    {/* 輸入與顯示區域 */}
+                    {hasListed ? (
+                      <div className="text-sm bg-gray-800/80 border border-gray-700 px-3 py-1.5 rounded-lg flex flex-wrap items-center gap-2">
+                        <span className="text-gray-400">已上架:</span>
+                        <span className="text-indigo-300 font-medium">{listedData.name}</span>
+                        <span className="text-gray-600">|</span>
+                        <span className="text-gray-400">價格:</span>
+                        <span className="text-green-400 font-mono">${listedData.price}</span>
+                      </div>
                     ) : (
                       isSelf && !isSettled && (
-                        <label className="cursor-pointer text-sm bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
-                          <Upload size={14} />
-                          {uploadingState[pid] ? '上傳中...' : '上傳圖片'}
-                          <input 
-                            type="file" 
-                            accept="image/*" 
-                            className="hidden" 
-                            onChange={(e) => handleUploadImage(e, pid)}
-                            disabled={uploadingState[pid]}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="拉取的物品名稱"
+                            value={listInputs[pid]?.name || ''}
+                            onChange={(e) => setListInputs(prev => ({ ...prev, [pid]: { ...prev[pid], name: e.target.value } }))}
+                            className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-1.5 text-sm w-36 focus:outline-none focus:border-indigo-500"
                           />
-                        </label>
+                          <input
+                            type="number"
+                            placeholder="設定價格"
+                            value={listInputs[pid]?.price || ''}
+                            onChange={(e) => setListInputs(prev => ({ ...prev, [pid]: { ...prev[pid], price: e.target.value } }))}
+                            className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:border-indigo-500 font-mono"
+                          />
+                          <button
+                            disabled={isNotifying}
+                            onClick={() => handleNotify(pid)}
+                            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 text-white text-sm px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            {isNotifying ? '送出中...' : '送出提醒'}
+                          </button>
+                        </div>
                       )
                     )}
 
-                    {/* Settlement Toggle (Seller Only) */}
+                    {/* 賣家確認按鈕 */}
                     {isSeller && (
                       <button
                         onClick={() => handleToggleSettled(pid)}
-                        className={`text-sm px-4 py-1.5 rounded-lg font-medium transition-colors border ${
+                        className={`text-sm px-4 py-1.5 rounded-lg font-medium transition-colors border whitespace-nowrap ${
                           isSettled 
                             ? 'bg-green-600 hover:bg-green-700 text-white border-green-500' 
                             : 'bg-transparent border-gray-600 text-gray-400 hover:bg-gray-800 hover:text-white'
@@ -806,14 +810,14 @@ function SoldItemCard({ item, members, currentUser, settings }) {
                     )}
                     
                     {!isSeller && (
-                       <span className={`text-sm px-3 py-1 rounded-lg ${isSettled ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
+                       <span className={`text-sm px-3 py-1.5 rounded-lg whitespace-nowrap ${isSettled ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
                          {isSettled ? '賣家已確認' : '等待賣家確認'}
                        </span>
                     )}
                   </div>
                 )}
                 {isThisSeller && (
-                  <div className="text-sm text-gray-500 ml-5 sm:ml-0 italic">
+                  <div className="text-sm text-gray-500 ml-5 xl:ml-0 italic">
                     無需上架
                   </div>
                 )}
@@ -843,7 +847,6 @@ function SoldItemCard({ item, members, currentUser, settings }) {
     </div>
   );
 }
-
 
 // --- History View (歷史查詢 - Admin Only) ---
 function HistoryView({ items, members }) {
@@ -908,7 +911,6 @@ function SettingsView({ members, settings }) {
   const [newMemberDiscord, setNewMemberDiscord] = useState('');
   
   const [webhookUrl, setWebhookUrl] = useState(settings.discordWebhook || '');
-  const [imgurId, setImgurId] = useState(settings.imgurClientId || '');
 
   const handleAddMember = async (e) => {
     e.preventDefault();
@@ -938,8 +940,7 @@ function SettingsView({ members, settings }) {
   const handleSaveSettings = async () => {
     try {
       await updateDoc(settingsRef, {
-        discordWebhook: webhookUrl,
-        imgurClientId: imgurId
+        discordWebhook: webhookUrl
       });
       alert('設定已儲存');
     } catch (e) {
@@ -958,11 +959,11 @@ function SettingsView({ members, settings }) {
           <Settings size={20} className="text-indigo-400"/> 系統參數設定
         </h3>
         
-        {(!settings.discordWebhook || settings.imgurClientId === 'e4544b14d2417a8') && (
+        {!settings.discordWebhook && (
           <div className="mb-6 bg-yellow-900/20 border border-yellow-700/50 rounded-xl p-4 flex items-start gap-3">
             <AlertCircle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
             <p className="text-sm text-yellow-200/80">
-              強烈建議填寫你們公會專屬的 <strong>Discord Webhook URL</strong> 以及註冊自己的 <strong>Imgur Client ID</strong> 以確保圖片上傳穩定。
+              強烈建議填寫你們公會專屬的 <strong>Discord Webhook URL</strong> 以接收成員上架物品的提醒。
             </p>
           </div>
         )}
@@ -978,20 +979,6 @@ function SettingsView({ members, settings }) {
               className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500"
             />
             <p className="text-xs text-gray-500 mt-1">用於接收成員回報上架的通知。</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Imgur Client ID</label>
-            <input
-              type="text"
-              value={imgurId}
-              onChange={e => setImgurId(e.target.value)}
-              placeholder="輸入 Imgur Client ID"
-              className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              用於圖片上傳。若無可暫時留空或使用預設值。
-              <a href="https://api.imgur.com/oauth2/addclient" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline ml-2">前往申請</a>
-            </p>
           </div>
           <button
             onClick={handleSaveSettings}

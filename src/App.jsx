@@ -6,13 +6,14 @@ import { Settings, History, Store, CheckCircle, Plus, Trash2, Users, AlertCircle
 
 // --- Firebase Initialization ---
 // 請確保這裡填入你自己的 Firebase 設定
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  // apiKey: "AIzaSy...",
-  // authDomain: "...",
-  // projectId: "...",
-  // storageBucket: "...",
-  // messagingSenderId: "...",
-  // appId: "..."
+const firebaseConfig = {
+  apiKey: "AIzaSyD-PbHRXhROMW6zZnJ9QuR4Iat6L2z4GCk",
+  authDomain: "mpweb-fee81.firebaseapp.com",
+  projectId: "mpweb-fee81",
+  storageBucket: "mpweb-fee81.firebasestorage.app",
+  messagingSenderId: "968268703366",
+  appId: "1:968268703366:web:1de8c91fca9fb1729a1307",
+  measurementId: "G-7FNJ0D2ZJE"
 };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);

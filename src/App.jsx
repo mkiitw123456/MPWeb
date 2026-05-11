@@ -2,28 +2,28 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, addDoc } from 'firebase/firestore';
-import { Settings, History, Store, CheckCircle, Plus, Trash2, Upload, ExternalLink, Image as ImageIcon, Users, AlertCircle, LogOut } from 'lucide-react';
+import { Settings, History, Store, CheckCircle, Plus, Trash2, Users, AlertCircle, LogOut } from 'lucide-react';
 
 // --- Firebase Initialization ---
-const firebaseConfig = {
-  apiKey: "AIzaSyD-PbHRXhROMW6zZnJ9QuR4Iat6L2z4GCk",
-  authDomain: "mpweb-fee81.firebaseapp.com",
-  projectId: "mpweb-fee81",
-  storageBucket: "mpweb-fee81.firebasestorage.app",
-  messagingSenderId: "968268703366",
-  appId: "1:968268703366:web:1de8c91fca9fb1729a1307",
-  measurementId: "G-7FNJ0D2ZJE"
+// 請確保這裡填入你自己的 Firebase 設定
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  // apiKey: "AIzaSy...",
+  // authDomain: "...",
+  // projectId: "...",
+  // storageBucket: "...",
+  // messagingSenderId: "...",
+  // appId: "..."
 };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// Paths
-const basePath = `artifacts/${appId}/public/data`;
-const membersRef = collection(db, basePath, 'members');
-const itemsRef = collection(db, basePath, 'items');
-const settingsRef = doc(db, basePath, 'settings', 'global');
+// 為了確保本地開發不衝突，可以保留原本路徑或是使用簡單的 'members'
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/public/data` : 'app-data';
+const membersRef = collection(db, typeof __app_id !== 'undefined' ? `${basePath}/members` : 'members');
+const itemsRef = collection(db, typeof __app_id !== 'undefined' ? `${basePath}/items` : 'items');
+const settingsRef = doc(db, typeof __app_id !== 'undefined' ? `${basePath}/settings` : 'settings', 'global');
 
 // --- Helper Functions ---
 const calculateShares = (price, costs, participantCount) => {
@@ -40,7 +40,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null); // { id, name, role }
   const [members, setMembers] = useState([]);
   const [items, setItems] = useState([]);
-  const [settings, setSettings] = useState({ discordWebhook: '' }); // 移除了 Imgur 設定
+  const [settings, setSettings] = useState({ discordWebhook: '' });
   const [activeTab, setActiveTab] = useState('selling');
   const [loading, setLoading] = useState(true);
 
@@ -134,7 +134,7 @@ export default function App() {
       
       <main className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
         {activeTab === 'selling' && (
-          <SellingView items={items} members={members} currentUser={currentUser} />
+          <SellingView items={items} members={members} currentUser={currentUser} settings={settings} />
         )}
         {activeTab === 'sold' && (
           <SoldView items={items} members={members} currentUser={currentUser} settings={settings} />
@@ -291,7 +291,7 @@ function Navbar({ activeTab, setActiveTab, currentUser, onLogout }) {
 }
 
 // --- Selling View (待售區) ---
-function SellingView({ items, members, currentUser }) {
+function SellingView({ items, members, currentUser, settings }) {
   const [showModal, setShowModal] = useState(false);
   const sellingItems = items.filter(i => i.status === 'selling');
 
@@ -319,7 +319,8 @@ function SellingView({ items, members, currentUser }) {
               key={item.id} 
               item={item} 
               members={members} 
-              currentUser={currentUser} 
+              currentUser={currentUser}
+              settings={settings}
             />
           ))
         )}
@@ -336,15 +337,16 @@ function SellingView({ items, members, currentUser }) {
   );
 }
 
-function SellingItemCard({ item, members, currentUser }) {
-  // Local state for optimistic UI and blur saves
+function SellingItemCard({ item, members, currentUser, settings }) {
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState(item.price);
   const [costs, setCosts] = useState(item.costs || []);
   
   const isSeller = currentUser.id === item.sellerId;
   const sellerName = members.find(m => m.id === item.sellerId)?.name || '未知賣家';
-  const participantNames = item.participants.map(pid => members.find(m => m.id === pid)?.name || '未知').join(', ');
+  
+  // 即時計算分紅
+  const { perPerson } = calculateShares(price, costs, item.participants.length);
 
   const handleUpdate = async (field, value) => {
     try {
@@ -376,6 +378,24 @@ function SellingItemCard({ item, members, currentUser }) {
     if (!window.confirm('確定此物品已售出？')) return;
     try {
       await updateDoc(doc(itemsRef, item.id), { status: 'sold' });
+
+      // 發送 Discord 通知 Tag 所有參與人 (排除賣家自己)
+      if (settings.discordWebhook) {
+        const tags = item.participants
+          .filter(id => id !== item.sellerId) // 通常不需要 Tag 賣家自己上架
+          .map(id => members.find(m => m.id === id)?.discordId)
+          .filter(Boolean)
+          .map(discordId => `<@${discordId}>`)
+          .join(' ');
+
+        const msg = `🎉 物品【${item.name}】已售出！\n請以下參與人前往系統回報上架，每人應上架金額為：**$${perPerson}**\n${tags}`;
+        
+        await fetch(settings.discordWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: msg })
+        }).catch(console.error);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -414,13 +434,13 @@ function SellingItemCard({ item, members, currentUser }) {
           <span className="text-gray-200">{sellerName}</span>
         </div>
         <div>
-          <span className="block mb-1 text-xs uppercase tracking-wider text-gray-500">參與人 ({item.participants.length})</span>
-          <span className="text-gray-200 truncate block" title={participantNames}>{participantNames}</span>
+          <span className="block mb-1 text-xs uppercase tracking-wider text-gray-500">預估每人分紅</span>
+          <span className="text-green-400 font-mono font-bold text-base">${perPerson}</span>
         </div>
       </div>
 
       <div className="flex items-center gap-3">
-        <span className="text-gray-400 font-medium whitespace-nowrap">售出價格 $</span>
+        <span className="text-gray-400 font-medium whitespace-nowrap">預計售價 $</span>
         <input
           type="number"
           value={price}
@@ -428,6 +448,39 @@ function SellingItemCard({ item, members, currentUser }) {
           onBlur={() => handleUpdate('price', Number(price))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 w-full focus:outline-none focus:border-indigo-500 font-mono"
         />
+      </div>
+
+      <div className="border-t border-gray-800 pt-4">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-medium text-gray-400">參與人 ({item.participants.length})</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {members.map(m => {
+            const isSelected = item.participants.includes(m.id);
+            // 若不是賣家，且該成員未被選中，則不顯示
+            if (!isSeller && !isSelected) return null;
+
+            return (
+              <button
+                key={m.id}
+                disabled={!isSeller}
+                onClick={() => {
+                  let newP = [...item.participants];
+                  if (isSelected) newP = newP.filter(id => id !== m.id);
+                  else newP.push(m.id);
+                  handleUpdate('participants', newP);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                  isSelected
+                    ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
+                    : 'bg-gray-800 border-gray-700 text-gray-500 hover:bg-gray-700 hover:text-gray-300'
+                } ${!isSeller ? 'cursor-default' : 'cursor-pointer'}`}
+              >
+                {m.name}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div className="border-t border-gray-800 pt-4">
@@ -472,7 +525,7 @@ function SellingItemCard({ item, members, currentUser }) {
             className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-xl transition-colors flex justify-center items-center gap-2"
           >
             <CheckCircle size={20} />
-            移至「已出售」
+            移至「已出售」並通知大家
           </button>
         </div>
       )}
@@ -500,7 +553,7 @@ function CreateItemModal({ onClose, members, currentUser }) {
         sellerId: currentUser.id,
         status: 'selling',
         createdAt: Date.now(),
-        listedItems: {}, // 從原本的 images 改成 listedItems
+        listedItems: {},
         settled: {}
       });
       onClose();
@@ -556,7 +609,7 @@ function CreateItemModal({ onClose, members, currentUser }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-400 mb-1">預計價格 (可後續修改)</label>
+            <label className="block text-sm font-medium text-gray-400 mb-1">預計售價 (可後續修改)</label>
             <input
               type="number"
               value={price}
@@ -634,7 +687,6 @@ function CreateItemModal({ onClose, members, currentUser }) {
   );
 }
 
-
 // --- Sold View (已出售) ---
 function SoldView({ items, members, currentUser, settings }) {
   const soldItems = items.filter(i => i.status === 'sold');
@@ -685,7 +737,7 @@ function SoldItemCard({ item, members, currentUser, settings }) {
       // 2. 觸發 Discord Webhook
       if (settings.discordWebhook && seller.discordId) {
         const pName = members.find(m => m.id === participantId)?.name || '某人';
-        const msg = `<@${seller.discordId}> 玩家 **${pName}** 已將替代物品【${input.name}】上架，價格為 **$${input.price}**`;
+        const msg = `<@${seller.discordId}> 玩家 **${pName}** 已將替代物品【${input.name}】上架，價格為 **$${input.price}**，請前往遊戲內拉取！`;
         await fetch(settings.discordWebhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -703,9 +755,24 @@ function SoldItemCard({ item, members, currentUser, settings }) {
 
   const handleToggleSettled = async (participantId) => {
     if (!isSeller) return;
+    const isCurrentlySettled = !!item.settled?.[participantId];
     const newSettled = { ...(item.settled || {}) };
-    newSettled[participantId] = !newSettled[participantId];
+    newSettled[participantId] = !isCurrentlySettled; // 切換狀態
+    
     await updateDoc(doc(itemsRef, item.id), { settled: newSettled });
+
+    // 如果是變成「已結清」的狀態，就發送通知給該玩家
+    if (!isCurrentlySettled && settings.discordWebhook) {
+      const pMember = members.find(m => m.id === participantId);
+      if (pMember?.discordId) {
+        const msg = `✅ <@${pMember.discordId}> 賣家已結清你的【${item.name}】分紅！`;
+        fetch(settings.discordWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: msg })
+        }).catch(console.error);
+      }
+    }
   };
 
   const handleArchive = async () => {
@@ -903,7 +970,6 @@ function HistoryView({ items, members }) {
     </div>
   );
 }
-
 
 // --- Admin Settings View ---
 function SettingsView({ members, settings }) {

@@ -5,7 +5,6 @@ import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc
 import { Settings, History, Store, CheckCircle, Plus, Trash2, Users, AlertCircle, LogOut } from 'lucide-react';
 
 // --- Firebase Initialization ---
-// 請確保這裡填入你自己的 Firebase 設定
 const firebaseConfig = {
   apiKey: "AIzaSyD-PbHRXhROMW6zZnJ9QuR4Iat6L2z4GCk",
   authDomain: "mpweb-fee81.firebaseapp.com",
@@ -19,12 +18,11 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 為了確保本地開發不衝突，可以保留原本路徑或是使用簡單的 'members'
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const basePath = typeof __app_id !== 'undefined' ? `artifacts/${appId}/public/data` : 'app-data';
-const membersRef = collection(db, typeof __app_id !== 'undefined' ? `${basePath}/members` : 'members');
-const itemsRef = collection(db, typeof __app_id !== 'undefined' ? `${basePath}/items` : 'items');
-const settingsRef = doc(db, typeof __app_id !== 'undefined' ? `${basePath}/settings` : 'settings', 'global');
+// 使用簡單的路徑，不依賴 __app_id
+const basePath = 'app-data';
+const membersRef = collection(db, `${basePath}/members`);
+const itemsRef = collection(db, `${basePath}/items`);
+const settingsRef = doc(db, `${basePath}/settings`, 'global');
 
 // --- Helper Functions ---
 const calculateShares = (price, costs, participantCount) => {

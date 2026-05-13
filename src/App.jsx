@@ -18,11 +18,10 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 使用簡單的路徑，不依賴 __app_id
-const basePath = 'app-data';
-const membersRef = collection(db, `${basePath}/members`);
-const itemsRef = collection(db, `${basePath}/items`);
-const settingsRef = doc(db, `${basePath}/settings`, 'global');
+// 改成直接使用根目錄集合，這樣符合 Firestore 的單數/雙數層級規則
+const membersRef = collection(db, 'members');
+const itemsRef = collection(db, 'items');
+const settingsRef = doc(db, 'settings', 'global');
 
 // --- Helper Functions ---
 const calculateShares = (price, costs, participantCount) => {
